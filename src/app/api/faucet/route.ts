@@ -21,17 +21,17 @@ async function fetchFaucetBalance(): Promise<number> {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         jsonrpc: '2.0',
-        method: 'sentrix_getBalance',
-        params: [faucetAddress],
+        method: 'eth_getBalance',
+        params: [faucetAddress, 'latest'],
         id: 1,
       }),
       signal: AbortSignal.timeout(3_000),
     })
     const data = await res.json() as { result?: string }
     const raw = data.result ?? '0'
-    // result may be hex ("0x...") or decimal string
-    const sentri = raw.startsWith('0x') ? parseInt(raw, 16) : parseInt(raw, 10)
-    return isNaN(sentri) ? 0 : sentri / 100_000_000 // 1 SRX = 100,000,000 sentri
+    // eth_getBalance returns hex wei (1 SRX = 10^10 wei in Sentrix)
+    const wei = raw.startsWith('0x') ? BigInt(raw) : BigInt(raw)
+    return Number(wei) / 10_000_000_000 / 100_000_000 // wei → sentri → SRX
   } catch {
     return 0
   }
