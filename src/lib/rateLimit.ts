@@ -2,56 +2,89 @@ import fs from 'fs'
 import path from 'path'
 import os from 'os'
 
-const LIMITS_FILE = process.env.RATE_LIMIT_FILE ?? path.join(os.tmpdir(), 'faucet-limits.json')
-const COOLDOWN_MS = 24 * 60 * 60 * 1000 // 24 hours
+const STORE_FILE = process.env.RATE_LIMIT_FILE ?? path.join(os.tmpdir(), 'faucet-limits.json')
+const COOLDOWN_MS = 24 * 60 * 60 * 1000   // 24 hours
 const CLEANUP_AGE_MS = 48 * 60 * 60 * 1000 // purge entries older than 48h
 
-type LimitsMap = Record<string, number>
+// Store shape:
+//   limits: { "ip_1.2.3.4": <ms>, "addr_0x1234": <ms> }
+//   totalDistributed: <number SRX>
+type Store = {
+  limits: Record<string, number>
+  totalDistributed: number
+}
 
-function readLimits(): LimitsMap {
+function readStore(): Store {
   try {
-    if (fs.existsSync(LIMITS_FILE)) {
-      const raw = fs.readFileSync(LIMITS_FILE, 'utf-8')
-      return JSON.parse(raw) as LimitsMap
+    if (fs.existsSync(STORE_FILE)) {
+      const raw = fs.readFileSync(STORE_FILE, 'utf-8')
+      const parsed = JSON.parse(raw) as Partial<Store>
+      return {
+        limits: parsed.limits ?? {},
+        totalDistributed: parsed.totalDistributed ?? 0,
+      }
     }
   } catch {
-    // file missing or corrupt — start fresh
+    // corrupt or missing — start fresh
   }
-  return {}
+  return { limits: {}, totalDistributed: 0 }
 }
 
-function writeLimits(limits: LimitsMap): void {
+function writeStore(store: Store): void {
   try {
-    fs.writeFileSync(LIMITS_FILE, JSON.stringify(limits, null, 2), 'utf-8')
+    fs.writeFileSync(STORE_FILE, JSON.stringify(store, null, 2), 'utf-8')
   } catch {
-    // non-fatal — rate limit state lost on write failure
+    // non-fatal
   }
 }
 
-export function checkRateLimit(ip: string): { allowed: boolean; cooldownSeconds: number } {
-  const limits = readLimits()
-  const now = Date.now()
-  const lastRequest = limits[ip] ?? 0
-  const elapsed = now - lastRequest
-
-  if (elapsed < COOLDOWN_MS) {
-    const remainingMs = COOLDOWN_MS - elapsed
-    return { allowed: false, cooldownSeconds: Math.ceil(remainingMs / 1000) }
-  }
-
-  return { allowed: true, cooldownSeconds: 0 }
+function remaining(ts: number): number {
+  const elapsed = Date.now() - ts
+  if (elapsed < COOLDOWN_MS) return Math.ceil((COOLDOWN_MS - elapsed) / 1000)
+  return 0
 }
 
-export function recordRequest(ip: string): void {
-  const limits = readLimits()
-  const now = Date.now()
-  limits[ip] = now
+export function checkRateLimits(
+  ip: string,
+  address: string
+): { allowed: boolean; cooldownSeconds: number; reason: 'ip' | 'address' | null } {
+  const store = readStore()
+  const ipKey = `ip_${ip}`
+  const addrKey = `addr_${address.toLowerCase()}`
 
-  // Purge stale entries to keep the file small
+  const ipTs = store.limits[ipKey] ?? 0
+  const addrTs = store.limits[addrKey] ?? 0
+
+  const ipCooldown = remaining(ipTs)
+  if (ipCooldown > 0) {
+    return { allowed: false, cooldownSeconds: ipCooldown, reason: 'ip' }
+  }
+
+  const addrCooldown = remaining(addrTs)
+  if (addrCooldown > 0) {
+    return { allowed: false, cooldownSeconds: addrCooldown, reason: 'address' }
+  }
+
+  return { allowed: true, cooldownSeconds: 0, reason: null }
+}
+
+export function recordClaim(ip: string, address: string, amountSrx: number): void {
+  const store = readStore()
+  const now = Date.now()
   const cutoff = now - CLEANUP_AGE_MS
-  for (const key of Object.keys(limits)) {
-    if (limits[key] < cutoff) delete limits[key]
+
+  store.limits[`ip_${ip}`] = now
+  store.limits[`addr_${address.toLowerCase()}`] = now
+  store.totalDistributed = (store.totalDistributed ?? 0) + amountSrx
+
+  // Purge stale entries
+  for (const key of Object.keys(store.limits)) {
+    if (store.limits[key] < cutoff) delete store.limits[key]
   }
 
-  writeLimits(limits)
+  writeStore(store)
+}
+
+export function getTotalDistributed(): number {
+  return readStore().totalDistributed
 }
