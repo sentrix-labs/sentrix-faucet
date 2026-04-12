@@ -78,7 +78,8 @@ export async function POST(request: NextRequest) {
     // Validate server config
     const faucetPrivateKey = process.env.FAUCET_PRIVATE_KEY
     const faucetAddress = process.env.FAUCET_ADDRESS
-    const amount = parseInt(process.env.FAUCET_AMOUNT ?? '10', 10)
+    // FAUCET_AMOUNT is in SRX; multiply by 100_000_000 to convert to sentri (chain unit)
+    const amount = parseInt(process.env.FAUCET_AMOUNT ?? '10', 10) * 100_000_000
 
     if (!faucetPrivateKey || faucetPrivateKey === 'FILL_IN_FROM_GENESIS_WALLETS') {
       console.error('[faucet] FAUCET_PRIVATE_KEY not configured')
@@ -97,7 +98,7 @@ export async function POST(request: NextRequest) {
         body: JSON.stringify({
           jsonrpc: '2.0',
           method: 'sentrix_sendTransaction',
-          params: [{ from: faucetAddress, to: address, amount, private_key: faucetPrivateKey }],
+          params: [{ from: faucetAddress, to: address, amount, fee: 10000, private_key: faucetPrivateKey }],
           id: 1,
         }),
         signal: AbortSignal.timeout(15_000),
@@ -110,7 +111,7 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    let rpcData: { result?: string; error?: { message?: string } }
+    let rpcData: { result?: unknown; error?: { message?: string } }
     try {
       rpcData = await rpcRes.json()
     } catch {
@@ -128,7 +129,11 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const txHash = rpcData.result ?? ''
+    // sentrix_sendTransaction returns { txid: "...", status: "..." } — extract txid
+    const result = rpcData.result
+    const txHash = typeof result === 'object' && result !== null
+      ? (result as { txid?: string }).txid ?? ''
+      : String(result ?? '')
 
     // Record after confirmed success
     recordClaim(ip, address, amount)
