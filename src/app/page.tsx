@@ -54,7 +54,7 @@ export default function FaucetPage() {
   const [cooldownSeconds, setCooldownSeconds] = useState(0)
   const [stats, setStats] = useState<FaucetStats | null>(null)
 
-  const explorerUrl = process.env.NEXT_PUBLIC_EXPLORER_URL ?? 'https://sentrix-explorer.sentriscloud.com'
+  const explorerUrl = process.env.NEXT_PUBLIC_EXPLORER_URL ?? 'https://sentrixscan.sentriscloud.com'
   const chainId = process.env.NEXT_PUBLIC_CHAIN_ID ?? '7119'
 
   // Effective address: wallet takes priority, else manual input
